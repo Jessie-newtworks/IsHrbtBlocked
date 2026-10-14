@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+.idea/
+.pytest_cache/
+
+# runtime files created by the app
+config.json
+errors.log
+*.xlsx
+*.saving.xlsx
+*.pt
+.venv-linux/
+.ishrbtblocked.lock
+launcher.log
+launcher.log.1
+run_hrbt.sh
+events.log
