@@ -195,9 +195,43 @@ class ExcelLogger:
         if self.is_open:
             self._row_for(d)
 
+    def blocked_seconds_between(self, first: date, last: date) -> tuple[int, int]:
+        """(stream 1, stream 2) blocked seconds for dates first..last inclusive."""
+        if not self.is_open:
+            return 0, 0
+        s1 = s2 = 0
+        for d, r in self._rows.items():
+            if first <= d <= last:
+                s1 += int(_as_number(self._ws.cell(r, 3).value))
+                s2 += int(_as_number(self._ws.cell(r, 5).value))
+        return s1, s2
+
     def totals(self, d: date) -> tuple[int, int, int, int]:
         """(s1 events, s1 seconds, s2 events, s2 seconds) recorded for date d."""
         if not self.is_open or d not in self._rows:
             return 0, 0, 0, 0
         r = self._rows[d]
         return tuple(int(_as_number(self._ws.cell(r, c).value)) for c in range(2, 6))  # type: ignore
+
+
+def read_blocked_seconds_between(path: Path, first: date, last: date) -> tuple[int, int]:
+    """Same as ExcelLogger.blocked_seconds_between, but straight from the file
+    (used while logging is stopped). Returns (0, 0) if the file can't be read."""
+    path = Path(path)
+    if not path.exists():
+        return 0, 0
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+    except Exception:
+        return 0, 0
+    try:
+        ws = wb[SHEET_NAME] if SHEET_NAME in wb.sheetnames else wb.worksheets[0]
+        s1 = s2 = 0
+        for row in ws.iter_rows(min_row=2, max_col=5, values_only=True):
+            d = _as_date(row[0]) if row else None
+            if d is not None and first <= d <= last:
+                s1 += int(_as_number(row[2]))
+                s2 += int(_as_number(row[4]))
+        return s1, s2
+    finally:
+        wb.close()

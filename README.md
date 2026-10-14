@@ -73,6 +73,10 @@ usually doesn't affect stoppage detection, because frames back up only when ther
 | `errors.log` | Plain-text error log (also notes each camera's frame rate after connecting) |
 | `events.log` | One line per event start and end, with times and duration. Use it to check the daily totals against what really happened |
 
+The **Blocked time, last 30 days** box under the controls shows each tunnel's total
+blocked time (hours and minutes) for today and the 29 days before it, read from the Excel
+log. It updates every second while logging.
+
 The Excel file is saved within a second of each new event, every 30 s while logging, and
 when logging stops. If you have it open in Excel, the save is retried automatically.
 When you click Stop, the app asks you to close Excel so it can write the final save.

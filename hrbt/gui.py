@@ -6,7 +6,7 @@ import os
 import sys
 import tkinter as tk
 from dataclasses import replace
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from tkinter import messagebox, ttk
 
 from PIL import Image, ImageTk
@@ -15,13 +15,15 @@ from . import app_dir
 from .config import Config, ConfigError, load_config, save_config
 from .error_log import get_log_path, log_error
 from .event_tracker import EventTracker
-from .excel_logger import ExcelLogError, ExcelLogger, create_workbook
+from .excel_logger import (ExcelLogError, ExcelLogger, create_workbook,
+                           read_blocked_seconds_between)
 from .stream_monitor import StreamMonitor, fmt_duration
 
 VIEW_W, VIEW_H = 560, 315        # initial size of each live view (16:9)
 FRAME_MS = 66                    # live view refresh (~15 fps)
 TICK_MS = 1000                   # counters / Excel update
 SAVE_EVERY_S = 30                # periodic Excel save while logging
+HISTORY_DAYS = 30                # "Last 30 days" box in the controls
 
 
 class StreamView(ttk.LabelFrame):
@@ -194,7 +196,20 @@ class App(tk.Tk):
         row += 1
         ttk.Button(ctl, text="Open Error Log", command=self.open_error_log).grid(
             row=row, column=0, sticky="w", pady=(8, 0))
+        row += 1
+
+        # Longer-term view: total blocked time over the last 30 days
+        hist = ttk.LabelFrame(ctl, text=f"Blocked time, last {HISTORY_DAYS} days", padding=8)
+        hist.grid(row=row, column=0, sticky="ew", pady=(12, 0))
+        hist.columnconfigure(1, weight=1)
+        self.hist_lbls = {}
+        for i, name in ((1, self.cfg.stream_1_name), (2, self.cfg.stream_2_name)):
+            ttk.Label(hist, text=name).grid(row=i - 1, column=0, sticky="w", padx=(0, 10))
+            lbl = ttk.Label(hist, text="0 h 00 min", font=("Segoe UI", 11, "bold"))
+            lbl.grid(row=i - 1, column=1, sticky="e")
+            self.hist_lbls[i] = lbl
         self._update_info()
+        self._refresh_history_from_file()
 
     def _fill_fields(self) -> None:
         self.var_s1.set(self.cfg.stream_1_url)
@@ -339,6 +354,7 @@ class App(tk.Tk):
 
         for v in self.views.values():
             v.show_stopped()
+        self._refresh_history_from_file()
         self.start_btn.config(state="normal")
         self.stop_btn.config(state="disabled")
         self.state_lbl.config(text="Logging: STOPPED", foreground="#b00020")
@@ -374,12 +390,36 @@ class App(tk.Tk):
                 self.logger.save()
                 self._last_save = now
             totals = self.logger.totals(today)
+            first, last = self._history_range()
+            hist = self.logger.blocked_seconds_between(first, last)
             for i, (ev_idx, sec_idx) in ((1, (0, 1)), (2, (2, 3))):
                 p_ev, p_sec = self.trackers[i].pending(today)
                 self.views[i].set_stats(totals[ev_idx] + p_ev, totals[sec_idx] + p_sec)
+                self._show_history(i, hist[i - 1] + p_sec)
         except Exception as exc:
             log_error("Error while updating counters.", exc)
         self._tick_job = self.after(TICK_MS, self._tick)
+
+    # --------------------------------------------------------------- history
+    @staticmethod
+    def _history_range() -> tuple[date, date]:
+        """Today and the 29 days before it."""
+        today = date.today()
+        return today - timedelta(days=HISTORY_DAYS - 1), today
+
+    def _show_history(self, stream: int, seconds: float) -> None:
+        minutes = int(seconds // 60)
+        self.hist_lbls[stream].config(text=f"{minutes // 60} h {minutes % 60:02d} min")
+
+    def _refresh_history_from_file(self) -> None:
+        """Fill the 30-day box from the Excel file while logging is stopped."""
+        try:
+            first, last = self._history_range()
+            s1, s2 = read_blocked_seconds_between(app_dir() / self.cfg.excel_file, first, last)
+            self._show_history(1, s1)
+            self._show_history(2, s2)
+        except Exception as exc:
+            log_error("Could not read the 30-day totals from the Excel log.", exc)
 
     # -------------------------------------------------------------- settings
     def update_settings(self) -> None:
