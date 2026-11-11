@@ -294,6 +294,14 @@ class StreamMonitor:
         self._perf_next = time.monotonic() + PERF_FIRST_REPORT_S
         self._event_start: float | None = None
         self._event_secs = 0.0
+        # Footage clips: on_clip(index, kind, start_ts, end_ts, seconds) is
+        # called when an event ends (kind "event") and, if near_miss_seconds
+        # > 0, after a gap of that long or more that stayed under the
+        # threshold (kind "gap"). Set by the GUI when recording is on.
+        self.on_clip = None
+        self.near_miss_seconds = 0.0
+        self._prev_snap = None
+        self._last_ts: float | None = None
 
     # -------------------------------------------------------------- lifecycle
     def start(self) -> None:
@@ -314,6 +322,8 @@ class StreamMonitor:
         if self._event_start is not None:
             log_event(f"{self.name}: logging STOPPED during an event - blocked "
                       f"{fmt_duration(self._event_secs)} so far")
+            self._request_clip("event", self._event_start, self._last_ts or time.time(),
+                               self._event_secs)
             self._event_start, self._event_secs = None, 0.0
         deadline = time.monotonic() + timeout
         for t in self._threads:
@@ -517,7 +527,15 @@ class StreamMonitor:
 
     def _log_event_change(self, snap, ts: float) -> None:
         """Write each event's start and end to events.log (for checking the app
-        against what really happened)."""
+        against what really happened), and ask for footage clips."""
+        prev, self._prev_snap = self._prev_snap, snap
+        self._last_ts = ts
+        if (self.near_miss_seconds > 0 and prev is not None and snap.feed_ok and prev.feed_ok
+                and not prev.in_event and not snap.in_event and prev.in_window
+                and snap.clear_seconds == 0
+                and self.near_miss_seconds <= prev.clear_seconds < self.tracker.threshold):
+            # a vehicle passed after a gap just under the threshold: a near miss
+            self._request_clip("gap", ts - prev.clear_seconds, ts, prev.clear_seconds)
         if snap.in_event and self._event_start is None:
             self._event_start = ts
             log_event(f"{self.name}: event STARTED at {_clock(ts)}")
@@ -526,7 +544,16 @@ class StreamMonitor:
         elif self._event_start is not None:
             log_event(f"{self.name}: event ENDED at {_clock(ts)} - blocked "
                       f"{fmt_duration(self._event_secs)} ({self._event_secs:.0f} s)")
+            self._request_clip("event", self._event_start, ts, self._event_secs)
             self._event_start, self._event_secs = None, 0.0
+
+    def _request_clip(self, kind: str, start: float, end: float, seconds: float) -> None:
+        if self.on_clip is None:
+            return
+        try:
+            self.on_clip(self.index, kind, start, end, seconds)
+        except Exception as exc:                  # never let recording break detection
+            log_error(f"{self.name}: could not queue a footage clip.", exc)
 
     def _detect(self, model, frame, ts: float, history: BoxHistory):
         t0 = time.perf_counter()

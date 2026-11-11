@@ -31,6 +31,25 @@ Advanced settings (JSON only):
                                     camera's 2-4 real pictures per second unseen
     detection_image_size          - size YOLO scales each picture to (640). 960 finds
                                     small / distant cars sooner but uses ~2x the CPU
+
+Footage recording (JSON only; needs ffmpeg - see hrbt/recorder.py):
+    record_footage                - true: record both cameras during the logging
+                                    window and save a clip of every event
+    recording_folder              - where recordings go (next to main.py unless an
+                                    absolute path is given)
+    recording_segment_seconds     - length of each full-recording file (300 = 5 min).
+                                    Clips are made of whole segments, so this is
+                                    also how precisely clips are trimmed
+    recording_keep_days           - full recordings older than this are deleted
+    event_clip_pre_seconds        - footage kept before an event starts
+    event_clip_post_seconds       - footage kept after an event ends
+    event_clips_max_gb            - when the event clips pass this, the oldest go
+    near_miss_clips               - true: also save clips of gaps of
+                                    near_miss_min_seconds up to the event threshold
+    near_miss_min_seconds         - shortest gap saved as a near-miss clip
+    near_miss_clips_max_gb        - size cap for the near-miss clips
+    min_free_disk_gb              - old recordings are deleted early, and recording
+                                    pauses if needed, to keep this much disk free
 """
 
 from __future__ import annotations
@@ -73,6 +92,18 @@ class Config:
     show_detection_boxes: bool = True
     min_vehicle_size: float = 0.06
     detection_image_size: int = 640
+    # --- footage recording ---
+    record_footage: bool = True
+    recording_folder: str = "recordings"
+    recording_segment_seconds: int = 300
+    recording_keep_days: float = 5
+    event_clip_pre_seconds: float = 60
+    event_clip_post_seconds: float = 120
+    event_clips_max_gb: float = 3
+    near_miss_clips: bool = False
+    near_miss_min_seconds: float = 15
+    near_miss_clips_max_gb: float = 1
+    min_free_disk_gb: float = 5
 
     # ------------------------------------------------------------------ helpers
     def validate(self) -> "Config":
@@ -122,13 +153,69 @@ class Config:
             raise ConfigError("stale_stream_seconds must be greater than 0.")
         self.ignore_stationary_vehicles = bool(self.ignore_stationary_vehicles)
         self.show_detection_boxes = bool(self.show_detection_boxes)
+        self._validate_recording()
         return self
+
+    def _validate_recording(self) -> None:
+        self.record_footage = _as_bool(self.record_footage, "record_footage")
+        self.near_miss_clips = _as_bool(self.near_miss_clips, "near_miss_clips")
+        self.recording_folder = str(self.recording_folder).strip()
+        if not self.recording_folder:
+            raise ConfigError("recording_folder cannot be empty.")
+        seg = _number(self.recording_segment_seconds, "recording_segment_seconds")
+        if not seg.is_integer() or not 10 <= seg <= 600:
+            raise ConfigError("recording_segment_seconds must be a whole number from 10 to 600.")
+        self.recording_segment_seconds = int(seg)
+        for name, low, high in (("recording_keep_days", 0, 365),
+                                ("event_clip_pre_seconds", None, 600),
+                                ("event_clip_post_seconds", None, 600),
+                                ("event_clips_max_gb", 0, None),
+                                ("near_miss_min_seconds", 0, None),
+                                ("near_miss_clips_max_gb", 0, None),
+                                ("min_free_disk_gb", None, None)):
+            value = _number(getattr(self, name), name)
+            if value < 0:
+                raise ConfigError(f"{name} cannot be negative.")
+            if low is not None and value <= low:
+                raise ConfigError(f"{name} must be greater than {low}.")
+            if high is not None and value > high:
+                raise ConfigError(f"{name} can be at most {high}.")
+            setattr(self, name, int(value) if value.is_integer() else value)
+        if self.near_miss_clips and self.near_miss_min_seconds >= self.event_threshold_seconds:
+            raise ConfigError("near_miss_min_seconds must be less than the event threshold "
+                              f"({self.event_threshold_seconds} s).")
 
     def streams_are_placeholders(self) -> bool:
         return not (is_url(self.stream_1_url) and is_url(self.stream_2_url))
 
     def window_minutes(self) -> tuple[int, int]:
         return hhmm_to_minutes(self.window_start), hhmm_to_minutes(self.window_end)
+
+
+def _number(value, name: str) -> float:
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be a number.")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise ConfigError(f"{name} must be a number.") from None
+    if number != number or number in (float("inf"), float("-inf")):
+        raise ConfigError(f"{name} must be a number.")
+    return number
+
+
+def _as_bool(value, name: str) -> bool:
+    """true/false (JSON), also "true"/"false", "yes"/"no", 1/0."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in ("true", "yes", "on", "1"):
+        return True
+    if text in ("false", "no", "off", "0"):
+        return False
+    raise ConfigError(f"{name} must be true or false.")
 
 
 def is_url(text: str) -> bool:

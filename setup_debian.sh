@@ -3,7 +3,8 @@
 #  IsHrbtBlocked - Debian desktop setup
 #
 #  Makes the app open and start logging by itself every time the VM boots:
-#    1. installs the system packages the app needs (Tkinter, OpenCV libraries)
+#    1. installs the system packages the app needs (Tkinter, OpenCV libraries,
+#       ffmpeg for footage recording)
 #    2. creates / reuses the Python virtual environment and installs packages
 #    3. checks your settings from the first launch (config.json, Excel, model)
 #    4. offers to set the time zone to America/New_York
@@ -40,7 +41,7 @@ for arg in "$@"; do
     case "$arg" in
         -y|--yes) ASSUME_YES=1 ;;
         --uninstall) UNINSTALL=1 ;;
-        -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
+        -h|--help) sed -n '2,24p' "$0"; exit 0 ;;
         *) echo "Unknown option: $arg (try --help)"; exit 1 ;;
     esac
 done
@@ -107,7 +108,7 @@ sudo -v || fail "Admin rights (sudo) are needed."
 
 # ================================================= 1. system packages
 bold "1/8  System packages"
-PKGS=(python3 python3-venv python3-pip python3-tk libgl1 libglib2.0-0)
+PKGS=(python3 python3-venv python3-pip python3-tk libgl1 libglib2.0-0 ffmpeg)
 MISSING=()
 for p in "${PKGS[@]}"; do
     dpkg-query -W -f='${Status}' "$p" 2>/dev/null | grep -q "install ok installed" || MISSING+=("$p")
@@ -117,7 +118,7 @@ if [ ${#MISSING[@]} -gt 0 ]; then
     sudo apt-get update -q
     sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -q "${MISSING[@]}"
 fi
-ok "python3, venv, Tkinter and OpenCV libraries installed"
+ok "python3, venv, Tkinter, OpenCV libraries and ffmpeg installed"
 
 # ================================================= 2. virtual environment
 bold "2/8  Python virtual environment"

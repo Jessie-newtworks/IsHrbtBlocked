@@ -17,6 +17,7 @@ from .error_log import get_log_path, log_error
 from .event_tracker import EventTracker
 from .excel_logger import (ExcelLogError, ExcelLogger, create_workbook,
                            read_blocked_seconds_between)
+from .recorder import FootageRecorder
 from .stream_monitor import StreamMonitor, fmt_duration
 
 VIEW_W, VIEW_H = 560, 315        # initial size of each live view (16:9)
@@ -81,6 +82,7 @@ class App(tk.Tk):
         self.logger: ExcelLogger | None = None
         self.trackers: dict[int, EventTracker] = {}
         self.monitors: dict[int, StreamMonitor] = {}
+        self.recorder: FootageRecorder | None = None
         self._last_save = 0.0
         self._frame_job = None
         self._tick_job = None
@@ -194,6 +196,10 @@ class App(tk.Tk):
                                   foreground="#555")
         self.info_lbl.grid(row=row, column=0, sticky="w")
         row += 1
+        self.rec_lbl = ttk.Label(ctl, text="", wraplength=280, justify="left",
+                                 foreground="#555")
+        self.rec_lbl.grid(row=row, column=0, sticky="w", pady=(6, 0))
+        row += 1
         ttk.Button(ctl, text="Open Error Log", command=self.open_error_log).grid(
             row=row, column=0, sticky="w", pady=(8, 0))
         row += 1
@@ -209,6 +215,7 @@ class App(tk.Tk):
             lbl.grid(row=i - 1, column=1, sticky="e")
             self.hist_lbls[i] = lbl
         self._update_info()
+        self._show_recording_status()
         self._refresh_history_from_file()
 
     def _fill_fields(self) -> None:
@@ -312,6 +319,18 @@ class App(tk.Tk):
             for i, name, url in ((1, c.stream_1_name, c.stream_1_url),
                                  (2, c.stream_2_name, c.stream_2_url))
         }
+        self.recorder = None
+        if c.record_footage:
+            try:
+                self.recorder = FootageRecorder(c, app_dir())
+                for m in self.monitors.values():
+                    m.on_clip = self.recorder.add_clip
+                    m.near_miss_seconds = c.near_miss_min_seconds if c.near_miss_clips else 0
+                self.recorder.start()
+            except Exception as exc:          # recording must never stop monitoring
+                log_error("Footage recording could not start.", exc)
+                self.recorder = None
+        self._show_recording_status()
         for m in self.monitors.values():
             m.start()
         self.running = True
@@ -333,6 +352,12 @@ class App(tk.Tk):
 
         for m in self.monitors.values():
             m.stop()
+        if self.recorder:
+            try:
+                self.recorder.stop()          # also saves clips still waiting
+            except Exception as exc:
+                log_error("Error while stopping footage recording.", exc)
+            self.recorder = None
         for t in self.trackers.values():
             t.end_event()
         self._flush_trackers(flush=True)
@@ -351,6 +376,7 @@ class App(tk.Tk):
         self.logger = None
         self.monitors, self.trackers = {}, {}
         self.running = False
+        self._show_recording_status()
 
         for v in self.views.values():
             v.show_stopped()
@@ -396,9 +422,22 @@ class App(tk.Tk):
                 p_ev, p_sec = self.trackers[i].pending(today)
                 self.views[i].set_stats(totals[ev_idx] + p_ev, totals[sec_idx] + p_sec)
                 self._show_history(i, hist[i - 1] + p_sec)
+            self._show_recording_status()
         except Exception as exc:
             log_error("Error while updating counters.", exc)
         self._tick_job = self.after(TICK_MS, self._tick)
+
+    def _show_recording_status(self) -> None:
+        if self.recorder:
+            text = self.recorder.status
+        elif self.cfg.record_footage and self.running:
+            text = "Footage: OFF (see errors.log)"
+        elif self.cfg.record_footage:
+            text = "Footage: records while logging"
+        else:
+            text = "Footage: off (record_footage is false)"
+        if self.rec_lbl.cget("text") != text:
+            self.rec_lbl.config(text=text)
 
     # --------------------------------------------------------------- history
     @staticmethod

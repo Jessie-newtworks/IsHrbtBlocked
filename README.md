@@ -72,6 +72,7 @@ usually doesn't affect stoppage detection, because frames back up only when ther
 | `hrbt_event_log.xlsx` | A: Date · B: Stream 1 events · C: Stream 1 seconds blocked · D: Stream 2 events · E: Stream 2 seconds blocked |
 | `errors.log` | Plain-text error log (also notes each camera's frame rate after connecting) |
 | `events.log` | One line per event start and end, with times and duration. Use it to check the daily totals against what really happened |
+| `recordings/` | Footage: full recordings and event clips (see below) |
 
 The **Blocked time, last 30 days** box under the controls shows each tunnel's total
 blocked time (hours and minutes) for today and the 29 days before it, read from the Excel
@@ -81,11 +82,41 @@ The Excel file is saved within a second of each new event, every 30 s while logg
 when logging stops. If you have it open in Excel, the save is retried automatically.
 When you click Stop, the app asks you to close Excel so it can write the final save.
 
+## Footage recording
+
+While logging, the app also records both cameras so events can be checked on video,
+including stoppages it may have missed. It needs **ffmpeg** (`setup_debian.sh` installs
+it; on Windows install ffmpeg and add it to PATH). Without ffmpeg, monitoring works as
+usual, recording is off, and errors.log says why.
+
+- **Full recording**: `recordings/full/stream1/` and `stream2/`, one file per 5 minutes
+  (`stream1_2026-11-10_06-05-00.ts`), during the logging window. ffmpeg saves the
+  camera's video as-is, so it uses almost no CPU (about 90 MB per camera per hour).
+  Files older than 5 days are deleted.
+- **Event clips**: `recordings/events/`, one per event, from 1 minute before it started to
+  2 minutes after it ended, named like the events.log line
+  (`2026-11-10_07-41-03_Stream_2_HRBT_EB_Exit_event_0h03m12s.ts`). Clips are made of whole
+  5-minute files, so each one starts and ends on a 5-minute mark (e.g. 07:35–07:50), and
+  it's saved once the file it ends in is finished. Kept until they pass 3 GB, then the
+  oldest go.
+- **Near-miss clips** (off by default): gaps of 15 s up to the threshold, in
+  `recordings/near_misses/`, capped at 1 GB.
+- **Disk guard**: old full recordings are deleted early so at least 5 GB stays free. If
+  that isn't enough, recording pauses until there's room. Clips are never deleted for space.
+- The Controls panel shows the recording status. ffmpeg problems (stream errors,
+  restarts) go to errors.log. `.ts` files play in VLC.
+
+Settings (config.json): `record_footage`, `recording_folder`, `recording_segment_seconds`,
+`recording_keep_days`, `event_clip_pre_seconds`, `event_clip_post_seconds`,
+`event_clips_max_gb`, `near_miss_clips`, `near_miss_min_seconds`, `near_miss_clips_max_gb`,
+`min_free_disk_gb`.
+
 ### Advanced settings (config.json only)
 
 `stream_1_name`, `stream_2_name`, `excel_file`, `model`, `confidence`,
 `motion_pixel_fraction` (0 = run YOLO on every frame), `ignore_stationary_vehicles`, `stale_stream_seconds`,
-`show_detection_boxes`, `min_vehicle_size`, `detection_image_size`. The top of `hrbt/config.py` describes each one.
+`show_detection_boxes`, `min_vehicle_size`, `detection_image_size`, and the footage
+recording settings above. The top of `hrbt/config.py` describes each one.
 
 ## Running on a Debian VM (starts by itself after every reboot)
 
@@ -102,7 +133,7 @@ When you click Stop, the app asks you to close Excel so it can write the final s
    ./setup_debian.sh
    ```
 
-   It installs the system packages (Tkinter, OpenCV libraries) and CPU-only PyTorch, and
+   It installs the system packages (Tkinter, OpenCV libraries, ffmpeg) and CPU-only PyTorch, and
    checks your settings. It sets the time zone to America/New_York and creates `run_hrbt.sh`.
    It also adds the app to the desktop's autostart, turns on automatic login (GDM,
    LightDM or SDDM), and turns off suspend. Each change asks first. `--yes` accepts all
